@@ -292,7 +292,7 @@ func AuthenticateEmail(ctx context.Context, logger *zap.Logger, db *sql.DB, emai
 	found := true
 
 	// Look for an existing account.
-	query := "SELECT id, username, password, disable_time, status FROM users WHERE email = $1 AND wallet_public_key IS NOT NULL"
+	query := "SELECT id, username, password, disable_time, status FROM users WHERE email = $1"
 	var dbUserID string
 	var dbUsername string
 	var dbPassword []byte
