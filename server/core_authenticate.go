@@ -655,7 +655,7 @@ func AuthenticateGoogle(ctx context.Context, logger *zap.Logger, db *sql.DB, cli
 	// 	return "", "", false, status.Error(codes.Unauthenticated, "Could not authenticate Google profile.")
 	// }
 	found := true
-	err := nil
+	var err error
 	// Look for an existing account.
 	query := "SELECT id, username, disable_time, display_name, avatar_url FROM users WHERE google_id = $1"
 	var dbUserID string
