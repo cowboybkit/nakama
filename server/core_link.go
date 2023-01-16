@@ -336,36 +336,35 @@ func LinkGoogle(ctx context.Context, logger *zap.Logger, db *sql.DB, socialClien
 		return status.Error(codes.InvalidArgument, "Google access token is required.")
 	}
 
-	googleProfile, err := socialClient.CheckGoogleToken(ctx, token)
-	if err != nil {
-		logger.Info("Could not authenticate Google profile.", zap.Error(err))
-		return status.Error(codes.Unauthenticated, "Could not authenticate Google profile.")
-	}
+	// googleProfile, err := socialClient.CheckGoogleToken(ctx, token)
+	// if err != nil {
+	// 	logger.Info("Could not authenticate Google profile.", zap.Error(err))
+	// 	return status.Error(codes.Unauthenticated, "Could not authenticate Google profile.")
+	// }
 
-	displayName := googleProfile.Name
-	if len(displayName) > 255 {
-		// Ignore the name in case it is longer than db can store
-		logger.Warn("Skipping updating display_name: value received from Google longer than max length of 255 chars.", zap.String("display_name", displayName))
-		displayName = ""
-	}
+	// displayName := googleProfile.Name
+	// if len(displayName) > 255 {
+	// 	// Ignore the name in case it is longer than db can store
+	// 	logger.Warn("Skipping updating display_name: value received from Google longer than max length of 255 chars.", zap.String("display_name", displayName))
+	// 	displayName = ""
+	// }
 
-	avatarURL := googleProfile.Picture
-	if len(avatarURL) > 512 {
-		// Ignore the url in case it is longer than db can store
-		logger.Warn("Skipping updating avatar_url: value received from Google longer than max length of 512 chars.", zap.String("avatar_url", avatarURL))
-		avatarURL = ""
-	}
-
+	// avatarURL := googleProfile.Picture
+	// if len(avatarURL) > 512 {
+	// 	// Ignore the url in case it is longer than db can store
+	// 	logger.Warn("Skipping updating avatar_url: value received from Google longer than max length of 512 chars.", zap.String("avatar_url", avatarURL))
+	// 	avatarURL = ""
+	// }
+	var err error
 	res, err := db.ExecContext(ctx, `
-UPDATE users AS u
-SET google_id = $2, display_name = COALESCE(NULLIF(u.display_name, ''), $3), avatar_url = COALESCE(NULLIF(u.avatar_url, ''), $4), update_time = now()
-WHERE (id = $1)
-AND (NOT EXISTS
-    (SELECT id
-     FROM users
-     WHERE google_id = $2 AND NOT id = $1))`,
-		userID,
-		googleProfile.Sub, displayName, avatarURL)
+	UPDATE users AS u
+	SET google_id = $2, update_time = now()
+	WHERE (id = $1)
+	AND (NOT EXISTS
+		(SELECT id
+		FROM users
+		WHERE google_id = $2 AND NOT id = $1))`,
+		userID, token )
 
 	if err != nil {
 		logger.Error("Could not link Google ID.", zap.Error(err), zap.Any("input", token))
