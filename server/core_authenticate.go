@@ -650,10 +650,10 @@ func AuthenticateGameCenter(ctx context.Context, logger *zap.Logger, db *sql.DB,
 
 func AuthenticateGoogle(ctx context.Context, logger *zap.Logger, db *sql.DB, client *social.Client, idToken, username string, create bool) (string, string, bool, error) {
 	// googleProfile, err := client.CheckGoogleToken(ctx, idToken)
-	if err != nil {
-		logger.Info("Could not authenticate Google profile.", zap.Error(err))
-		return "", "", false, status.Error(codes.Unauthenticated, "Could not authenticate Google profile.")
-	}
+	// if err != nil {
+	// 	logger.Info("Could not authenticate Google profile.", zap.Error(err))
+	// 	return "", "", false, status.Error(codes.Unauthenticated, "Could not authenticate Google profile.")
+	// }
 	found := true
 
 	// Look for an existing account.
