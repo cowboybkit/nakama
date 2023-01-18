@@ -649,13 +649,13 @@ func AuthenticateGameCenter(ctx context.Context, logger *zap.Logger, db *sql.DB,
 }
 
 func AuthenticateGoogle(ctx context.Context, logger *zap.Logger, db *sql.DB, client *social.Client, idToken, username string, create bool) (string, string, bool, error) {
-	googleProfile, err := client.CheckGoogleToken(ctx, idToken)
-	if err != nil {
-		logger.Info("Could not authenticate Google profile.", zap.Error(err))
-		return "", "", false, status.Error(codes.Unauthenticated, "Could not authenticate Google profile.")
-	}
+	// googleProfile, err := client.CheckGoogleToken(ctx, idToken)
+	// if err != nil {
+	// 	logger.Info("Could not authenticate Google profile.", zap.Error(err))
+	// 	return "", "", false, status.Error(codes.Unauthenticated, "Could not authenticate Google profile.")
+	// }
 	found := true
-
+	var err error
 	// Look for an existing account.
 	query := "SELECT id, username, disable_time, display_name, avatar_url FROM users WHERE google_id = $1"
 	var dbUserID string
@@ -663,62 +663,62 @@ func AuthenticateGoogle(ctx context.Context, logger *zap.Logger, db *sql.DB, cli
 	var dbDisableTime pgtype.Timestamptz
 	var dbDisplayName sql.NullString
 	var dbAvatarURL sql.NullString
-	err = db.QueryRowContext(ctx, query, googleProfile.Sub).Scan(&dbUserID, &dbUsername, &dbDisableTime, &dbDisplayName, &dbAvatarURL)
+	err = db.QueryRowContext(ctx, query, idToken).Scan(&dbUserID, &dbUsername, &dbDisableTime, &dbDisplayName, &dbAvatarURL)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			found = false
 		} else {
-			logger.Error("Error looking up user by Google ID.", zap.Error(err), zap.String("googleID", googleProfile.Sub), zap.String("username", username), zap.Bool("create", create))
+			logger.Error("Error looking up user by Google ID.", zap.Error(err), zap.String("googleID", idToken), zap.String("username", username), zap.Bool("create", create))
 			return "", "", false, status.Error(codes.Internal, "Error finding user account.")
 		}
 	}
 
-	var displayName string
-	if len(googleProfile.Name) <= 255 {
-		displayName = googleProfile.Name
-	} else {
-		logger.Warn("Skipping updating display_name: value received from Google longer than max length of 255 chars.", zap.String("display_name", googleProfile.Name))
-	}
+	// var displayName string
+	// if len(googleProfile.Name) <= 255 {
+	// 	displayName = googleProfile.Name
+	// } else {
+	// 	logger.Warn("Skipping updating display_name: value received from Google longer than max length of 255 chars.", zap.String("display_name", googleProfile.Name))
+	// }
 
-	var avatarURL string
-	if len(googleProfile.Picture) <= 512 {
-		avatarURL = googleProfile.Picture
-	} else {
-		logger.Warn("Skipping updating avatar_url: value received from Google longer than max length of 512 chars.", zap.String("avatar_url", avatarURL))
-	}
+	// var avatarURL string
+	// if len(googleProfile.Picture) <= 512 {
+	// 	avatarURL = googleProfile.Picture
+	// } else {
+	// 	logger.Warn("Skipping updating avatar_url: value received from Google longer than max length of 512 chars.", zap.String("avatar_url", avatarURL))
+	// }
 
 	// Existing account found.
 	if found {
 		// Check if it's disabled.
 		if dbDisableTime.Status == pgtype.Present && dbDisableTime.Time.Unix() != 0 {
-			logger.Info("User account is disabled.", zap.String("googleID", googleProfile.Sub), zap.String("username", username), zap.Bool("create", create))
+			logger.Info("User account is disabled.", zap.String("googleID", idToken), zap.String("username", username), zap.Bool("create", create))
 			return "", "", false, status.Error(codes.PermissionDenied, "User account banned.")
 		}
 
 		// Check if the display name or avatar received from Google have values but the DB does not.
-		if (dbDisplayName.String == "" && displayName != "") || (dbAvatarURL.String == "" && avatarURL != "") {
-			// At least one valid change found, update the DB to reflect changes.
-			params := make([]interface{}, 0, 3)
-			params = append(params, dbUserID)
+		// if (dbDisplayName.String == "" && displayName != "") || (dbAvatarURL.String == "" && avatarURL != "") {
+		// 	// At least one valid change found, update the DB to reflect changes.
+		// 	params := make([]interface{}, 0, 3)
+		// 	params = append(params, dbUserID)
 
-			// Ensure only changed values are applied.
-			statements := make([]string, 0, 2)
-			if dbDisplayName.String == "" && displayName != "" {
-				params = append(params, displayName)
-				statements = append(statements, "display_name = $"+strconv.Itoa(len(params)))
-			}
-			if dbAvatarURL.String == "" && avatarURL != "" {
-				params = append(params, avatarURL)
-				statements = append(statements, "avatar_url = $"+strconv.Itoa(len(params)))
-			}
+		// 	// Ensure only changed values are applied.
+		// 	statements := make([]string, 0, 2)
+		// 	if dbDisplayName.String == "" && displayName != "" {
+		// 		params = append(params, displayName)
+		// 		statements = append(statements, "display_name = $"+strconv.Itoa(len(params)))
+		// 	}
+		// 	if dbAvatarURL.String == "" && avatarURL != "" {
+		// 		params = append(params, avatarURL)
+		// 		statements = append(statements, "avatar_url = $"+strconv.Itoa(len(params)))
+		// 	}
 
-			if len(statements) > 0 {
-				if _, err = db.ExecContext(ctx, "UPDATE users SET "+strings.Join(statements, ", ")+", update_time = now() WHERE id = $1", params...); err != nil {
-					// Failure to update does not interrupt the execution. Just log the error and continue.
-					logger.Error("Error in updating google profile details", zap.Error(err), zap.String("googleID", googleProfile.Sub), zap.String("display_name", googleProfile.Name), zap.String("display_name", googleProfile.Picture))
-				}
-			}
-		}
+		// 	if len(statements) > 0 {
+		// 		if _, err = db.ExecContext(ctx, "UPDATE users SET "+strings.Join(statements, ", ")+", update_time = now() WHERE id = $1", params...); err != nil {
+		// 			// Failure to update does not interrupt the execution. Just log the error and continue.
+		// 			logger.Error("Error in updating google profile details", zap.Error(err), zap.String("googleID", googleProfile.Sub), zap.String("display_name", googleProfile.Name), zap.String("display_name", googleProfile.Picture))
+		// 		}
+		// 	}
+		// }
 
 		return dbUserID, dbUsername, false, nil
 	}
@@ -730,8 +730,8 @@ func AuthenticateGoogle(ctx context.Context, logger *zap.Logger, db *sql.DB, cli
 
 	// Create a new account.
 	userID := uuid.Must(uuid.NewV4()).String()
-	query = "INSERT INTO users (id, username, google_id, display_name, avatar_url, create_time, update_time) VALUES ($1, $2, $3, $4, $5, now(), now())"
-	result, err := db.ExecContext(ctx, query, userID, username, googleProfile.Sub, displayName, avatarURL)
+	query = "INSERT INTO users (id, username, google_id, create_time, update_time) VALUES ($1, $2, $3, now(), now())"
+	result, err := db.ExecContext(ctx, query, userID, username, idToken)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == dbErrorUniqueViolation {
@@ -740,11 +740,11 @@ func AuthenticateGoogle(ctx context.Context, logger *zap.Logger, db *sql.DB, cli
 				return "", "", false, status.Error(codes.AlreadyExists, "Username is already in use.")
 			} else if strings.Contains(pgErr.Message, "users_google_id_key") {
 				// A concurrent write has inserted this Google ID.
-				logger.Info("Did not insert new user as Google ID already exists.", zap.Error(err), zap.String("googleID", googleProfile.Sub), zap.String("username", username), zap.Bool("create", create))
+				logger.Info("Did not insert new user as Google ID already exists.", zap.Error(err), zap.String("googleID", idToken), zap.String("username", username), zap.Bool("create", create))
 				return "", "", false, status.Error(codes.Internal, "Error finding or creating user account.")
 			}
 		}
-		logger.Error("Cannot find or create user with Google ID.", zap.Error(err), zap.String("googleID", googleProfile.Sub), zap.String("username", username), zap.Bool("create", create))
+		logger.Error("Cannot find or create user with Google ID.", zap.Error(err), zap.String("googleID", idToken), zap.String("username", username), zap.Bool("create", create))
 		return "", "", false, status.Error(codes.Internal, "Error finding or creating user account.")
 	}
 
