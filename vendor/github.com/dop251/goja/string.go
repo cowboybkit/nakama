@@ -4,7 +4,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/dop251/goja/unistring"
@@ -15,22 +14,21 @@ const (
 )
 
 var (
-	stringTrue         valueString = asciiString("true")
-	stringFalse        valueString = asciiString("false")
-	stringNull         valueString = asciiString("null")
-	stringUndefined    valueString = asciiString("undefined")
-	stringObjectC      valueString = asciiString("object")
-	stringFunction     valueString = asciiString("function")
-	stringBoolean      valueString = asciiString("boolean")
-	stringString       valueString = asciiString("string")
-	stringSymbol       valueString = asciiString("symbol")
-	stringNumber       valueString = asciiString("number")
-	stringNaN          valueString = asciiString("NaN")
-	stringInfinity                 = asciiString("Infinity")
-	stringPlusInfinity             = asciiString("+Infinity")
-	stringNegInfinity              = asciiString("-Infinity")
-	stringBound_       valueString = asciiString("bound ")
-	stringEmpty        valueString = asciiString("")
+	stringTrue        valueString = asciiString("true")
+	stringFalse       valueString = asciiString("false")
+	stringNull        valueString = asciiString("null")
+	stringUndefined   valueString = asciiString("undefined")
+	stringObjectC     valueString = asciiString("object")
+	stringFunction    valueString = asciiString("function")
+	stringBoolean     valueString = asciiString("boolean")
+	stringString      valueString = asciiString("string")
+	stringSymbol      valueString = asciiString("symbol")
+	stringNumber      valueString = asciiString("number")
+	stringNaN         valueString = asciiString("NaN")
+	stringInfinity                = asciiString("Infinity")
+	stringNegInfinity             = asciiString("-Infinity")
+	stringBound_      valueString = asciiString("bound ")
+	stringEmpty       valueString = asciiString("")
 
 	stringError          valueString = asciiString("Error")
 	stringAggregateError valueString = asciiString("AggregateError")
@@ -43,7 +41,6 @@ var (
 	stringGoError        valueString = asciiString("GoError")
 
 	stringObjectNull      valueString = asciiString("[object Null]")
-	stringObjectObject    valueString = asciiString("[object Object]")
 	stringObjectUndefined valueString = asciiString("[object Undefined]")
 	stringInvalidDate     valueString = asciiString("Invalid Date")
 )
@@ -55,8 +52,8 @@ type valueString interface {
 	concat(valueString) valueString
 	substring(start, end int) valueString
 	compareTo(valueString) int
-	reader(start int) io.RuneReader
-	utf16Reader(start int) io.RuneReader
+	reader() io.RuneReader
+	utf16Reader() io.RuneReader
 	utf16Runes() []rune
 	index(valueString, int) int
 	lastIndex(valueString, int) int
@@ -93,16 +90,10 @@ func (si *stringIterObject) next() Value {
 func stringFromRune(r rune) valueString {
 	if r < utf8.RuneSelf {
 		var sb strings.Builder
-		sb.Grow(1)
 		sb.WriteByte(byte(r))
 		return asciiString(sb.String())
 	}
 	var sb unicodeStringBuilder
-	if r <= 0xFFFF {
-		sb.Grow(1)
-	} else {
-		sb.Grow(2)
-	}
 	sb.WriteRune(r)
 	return sb.String()
 }
@@ -111,7 +102,7 @@ func (r *Runtime) createStringIterator(s valueString) Value {
 	o := &Object{runtime: r}
 
 	si := &stringIterObject{
-		reader: &lenientUtf16Decoder{utf16Reader: s.utf16Reader(0)},
+		reader: &lenientUtf16Decoder{utf16Reader: s.utf16Reader()},
 	}
 	si.class = classStringIterator
 	si.val = o
@@ -131,35 +122,10 @@ type stringObject struct {
 }
 
 func newStringValue(s string) valueString {
-	utf16Size := 0
-	ascii := true
-	for _, chr := range s {
-		utf16Size++
-		if chr >= utf8.RuneSelf {
-			ascii = false
-			if chr > 0xFFFF {
-				utf16Size++
-			}
-		}
+	if u := unistring.Scan(s); u != nil {
+		return unicodeString(u)
 	}
-	if ascii {
-		return asciiString(s)
-	}
-	buf := make([]uint16, utf16Size+1)
-	buf[0] = unistring.BOM
-	c := 1
-	for _, chr := range s {
-		if chr <= 0xFFFF {
-			buf[c] = uint16(chr)
-		} else {
-			first, second := utf16.EncodeRune(chr)
-			buf[c] = uint16(first)
-			c++
-			buf[c] = uint16(second)
-		}
-		c++
-	}
-	return unicodeString(buf)
+	return asciiString(s)
 }
 
 func stringValueFromRaw(raw unistring.String) valueString {
@@ -190,12 +156,9 @@ func (s *stringObject) getStr(name unistring.String, receiver Value) Value {
 }
 
 func (s *stringObject) getIdx(idx valueInt, receiver Value) Value {
-	i := int64(idx)
-	if i >= 0 {
-		if i < int64(s.length) {
-			return s._getIdx(int(i))
-		}
-		return nil
+	i := int(idx)
+	if i >= 0 && i < s.length {
+		return s._getIdx(i)
 	}
 	return s.baseObject.getStr(idx.string(), receiver)
 }
@@ -261,8 +224,8 @@ func (s *stringObject) setForeignIdx(idx valueInt, val, receiver Value, throw bo
 
 func (s *stringObject) defineOwnPropertyStr(name unistring.String, descr PropertyDescriptor, throw bool) bool {
 	if i := strToGoIdx(name); i >= 0 && i < s.length {
-		s.val.runtime.typeErrorResult(throw, "Cannot redefine property: %d", i)
-		return false
+		_, ok := s._defineOwnProperty(name, &valueProperty{enumerable: true}, descr, throw)
+		return ok
 	}
 
 	return s.baseObject.defineOwnPropertyStr(name, descr, throw)
@@ -288,13 +251,13 @@ func (i *stringPropIter) next() (propIterItem, iterNextFunc) {
 	if i.idx < i.length {
 		name := strconv.Itoa(i.idx)
 		i.idx++
-		return propIterItem{name: unistring.String(name), enumerable: _ENUM_TRUE}, i.next
+		return propIterItem{name: asciiString(name), enumerable: _ENUM_TRUE}, i.next
 	}
 
-	return i.obj.baseObject.enumerateOwnKeys()()
+	return i.obj.baseObject.iterateStringKeys()()
 }
 
-func (s *stringObject) enumerateOwnKeys() iterNextFunc {
+func (s *stringObject) iterateStringKeys() iterNextFunc {
 	return (&stringPropIter{
 		str:    s.value,
 		obj:    s,
@@ -302,12 +265,12 @@ func (s *stringObject) enumerateOwnKeys() iterNextFunc {
 	}).next
 }
 
-func (s *stringObject) ownKeys(all bool, accum []Value) []Value {
+func (s *stringObject) stringKeys(all bool, accum []Value) []Value {
 	for i := 0; i < s.length; i++ {
 		accum = append(accum, asciiString(strconv.Itoa(i)))
 	}
 
-	return s.baseObject.ownKeys(all, accum)
+	return s.baseObject.stringKeys(all, accum)
 }
 
 func (s *stringObject) deleteStr(name unistring.String, throw bool) bool {
@@ -342,4 +305,25 @@ func (s *stringObject) hasOwnPropertyIdx(idx valueInt) bool {
 		return true
 	}
 	return s.baseObject.hasOwnPropertyStr(idx.string())
+}
+
+func devirtualizeString(s valueString) (asciiString, unicodeString) {
+	switch s := s.(type) {
+	case asciiString:
+		return s, nil
+	case unicodeString:
+		return "", s
+	case *importedString:
+		s.ensureScanned()
+		if s.u != nil {
+			return "", s.u
+		}
+		return asciiString(s.s), nil
+	default:
+		panic(unknownStringTypeErr(s))
+	}
+}
+
+func unknownStringTypeErr(v Value) interface{} {
+	return newTypeError("Internal bug: unknown string type: %T", v)
 }
