@@ -139,8 +139,8 @@ func main() {
 	cookie := newOrLoadCookie(config)
 	metrics := server.NewLocalMetrics(logger, startupLogger, db, config)
 	sessionRegistry := server.NewLocalSessionRegistry(metrics)
-	sessionCache := server.NewSessionCacheRedis(config.GetSession().TokenExpirySec)
-	consoleSessionCache := server.NewSessionCacheRedis(config.GetConsole().TokenExpirySec)
+	sessionCache := server.NewLocalSessionCache(config.GetSession().TokenExpirySec)
+	consoleSessionCache := server.NewLocalSessionCache(config.GetConsole().TokenExpirySec)
 	loginAttemptCache := server.NewLocalLoginAttemptCache()
 	statusRegistry := server.NewStatusRegistry(logger, config, sessionRegistry, jsonpbMarshaler)
 	tracker := server.StartLocalTracker(logger, config, sessionRegistry, statusRegistry, metrics, jsonpbMarshaler)
@@ -151,7 +151,7 @@ func main() {
 		sessionCache = server.NewSessionCacheRedis(config, logger, db, statusRegistry)
 	default:
 		startupLogger.Info("Session information", zap.String("cache", "memory"))
-		sessionCache = server.NewSessionCacheRedis(config.GetSession().TokenExpirySec)
+		sessionCache = server.NewLocalSessionCache(config.GetSession().TokenExpirySec)
 	}
 
 	router := server.NewLocalMessageRouter(sessionRegistry, tracker, jsonpbMarshaler)
