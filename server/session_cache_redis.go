@@ -44,10 +44,10 @@ type SessionCacheRedis struct {
 	cache              map[uuid.UUID]*sessionCacheUser
 	logger             *zap.Logger
 	db                 *sql.DB
-	tracker            Tracker
+	tracker            *StatusRegistry
 }
 
-func NewSessionCacheRedis(config Config, logger *zap.Logger, db *sql.DB, tracker Tracker) SessionCache {
+func NewSessionCacheRedis(config Config, logger *zap.Logger, db *sql.DB, tracker *StatusRegistry) SessionCache {
 	ctx, ctxCancelFn := context.WithCancel(context.Background())
 	s := &SessionCacheRedis{
 		config:  config,
