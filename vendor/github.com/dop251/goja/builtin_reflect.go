@@ -79,7 +79,7 @@ func (r *Runtime) builtin_reflect_isExtensible(call FunctionCall) Value {
 
 func (r *Runtime) builtin_reflect_ownKeys(call FunctionCall) Value {
 	target := r.toObject(call.Argument(0))
-	return r.newArrayValues(target.self.ownPropertyKeys(true, nil))
+	return r.newArrayValues(target.self.keys(true, nil))
 }
 
 func (r *Runtime) builtin_reflect_preventExtensions(call FunctionCall) Value {
@@ -123,6 +123,8 @@ func (r *Runtime) createReflect(val *Object) objectImpl {
 	o._putProp("preventExtensions", r.newNativeFunc(r.builtin_reflect_preventExtensions, nil, "preventExtensions", nil, 1), true, false, true)
 	o._putProp("set", r.newNativeFunc(r.builtin_reflect_set, nil, "set", nil, 3), true, false, true)
 	o._putProp("setPrototypeOf", r.newNativeFunc(r.builtin_reflect_setPrototypeOf, nil, "setPrototypeOf", nil, 2), true, false, true)
+
+	o._putSym(SymToStringTag, valueProp(asciiString("Reflect"), false, false, true))
 
 	return o
 }
