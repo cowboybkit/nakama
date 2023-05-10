@@ -213,7 +213,7 @@ func NotificationSave(ctx context.Context, logger *zap.Logger, db *sql.DB, notif
 		logger.Error("Could not save notifications.", zap.Error(err))
 		return err
 	}
-
+	logger.Debug("Send notification successfully")
 	return nil
 }
 

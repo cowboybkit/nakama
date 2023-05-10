@@ -15,8 +15,8 @@
 package server
 
 import (
-	"bytes"
 	"context"
+	"database/sql"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
@@ -33,6 +33,7 @@ import (
 	"github.com/heroiclabs/nakama-common/runtime"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -142,9 +143,11 @@ type LocalMatchRegistry struct {
 
 	stopped   *atomic.Bool
 	stoppedCh chan struct{}
+
+	db *sql.DB
 }
 
-func NewLocalMatchRegistry(logger, startupLogger *zap.Logger, config Config, sessionRegistry SessionRegistry, tracker Tracker, router MessageRouter, metrics Metrics, node string) MatchRegistry {
+func NewLocalMatchRegistry(logger, startupLogger *zap.Logger, config Config, sessionRegistry SessionRegistry, tracker Tracker, router MessageRouter, metrics Metrics, node string, db *sql.DB) MatchRegistry {
 
 	cfg := BlugeInMemoryConfig()
 	indexWriter, err := bluge.OpenWriter(cfg)
@@ -175,6 +178,7 @@ func NewLocalMatchRegistry(logger, startupLogger *zap.Logger, config Config, ses
 
 		stopped:   atomic.NewBool(false),
 		stoppedCh: make(chan struct{}, 2),
+		db:        db,
 	}
 
 	go func() {
@@ -223,33 +227,146 @@ func (r *LocalMatchRegistry) processLabelUpdates(batch *index.Batch) {
 }
 
 func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger, createFn RuntimeMatchCreateFunction, module string, params map[string]interface{}) (string, error) {
-	buf := &bytes.Buffer{}
-	if err := gob.NewEncoder(buf).Encode(params); err != nil {
-		return "", runtime.ErrCannotEncodeParams
-	}
-	if err := gob.NewDecoder(buf).Decode(&params); err != nil {
-		return "", runtime.ErrCannotDecodeParams
-	}
+	logger.Debug("Create match golang1")
+	go func() {
+		type Lobby struct {
+			ID             string
+			UserID         string
+			OpponentUserID *string
+			BidAmount      int
+			Status         string
+		}
+		var lobby Lobby
+		query := fmt.Sprintf(`
+			INSERT INTO drw_pvp_lobby
+			(user_id, bid_amount, status)
+			VALUES ($1, $2, $3)
+			RETURNING id, user_id, bid_amount;
+		`)
 
-	id := uuid.Must(uuid.NewV4())
-	matchLogger := logger.With(zap.String("mid", id.String()))
-	stopped := atomic.NewBool(false)
+		err := r.db.QueryRow(query, params["userID"], params["bidAmount"], "MATCHING").Scan(
+			&lobby.ID, &lobby.UserID, &lobby.BidAmount,
+		)
+		if err != nil {
+			r.logger.Error("Cant insert data to drw_pvp_lobby", zap.Error(err))
+		}
+		lobbyID := lobby.ID
+		var count int64 = 0
+		for {
+			str := fmt.Sprintf("%d", count)
+			logger.Debug(str)
+			count++
+			query := fmt.Sprintf(`
+				SELECT *
+				FROM drw_pvp_lobby
+				WHERE id = $1
+			`)
 
-	core, err := createFn(ctx, matchLogger, id, r.node, stopped, module)
-	if err != nil {
-		return "", err
-	}
-	if core == nil {
-		return "", errors.New("error creating match: not found")
-	}
+			r.db.QueryRow(query, lobbyID).Scan(&lobby.UserID, &lobby.BidAmount, &lobby.Status, &lobby.OpponentUserID)
 
-	// Start the match.
-	mh, err := r.NewMatch(matchLogger, id, core, stopped, params)
-	if err != nil {
-		return "", fmt.Errorf("error creating match: %v", err.Error())
-	}
+			var opponentUserID string
+			if lobby.OpponentUserID != nil {
+				opponentUserID = *lobby.OpponentUserID
+			} else {
+				opponentUserID = ""
+			}
+			if lobby.Status == `MATCHED` {
+				uid, err := uuid.FromString(lobby.UserID)
+				uid2, err := uuid.FromString(opponentUserID)
+				content := map[string]interface{}{
+					"lobby_id": lobby.ID,
+				}
+				contentBytes, err := json.Marshal(content)
+				if err != nil {
+					// Handle the error
+				}
+				senderID := uuid.Nil.String()
+				nots := []*api.Notification{
+					{
+						Id:         uuid.Must(uuid.NewV4()).String(),
+						Subject:    "Find opponent successful",
+						Content:    string(contentBytes),
+						Code:       4,
+						SenderId:   senderID,
+						Persistent: true,
+						CreateTime: &timestamppb.Timestamp{Seconds: time.Now().UTC().Unix()},
+					},
+				}
+				notification := map[uuid.UUID][]*api.Notification{
+					uid: nots,
+				}
+				notification2 := map[uuid.UUID][]*api.Notification{
+					uid2: nots,
+				}
+				_, err = r.db.Exec(`
+				INSERT INTO drw_pvp_battle
+				(lobby_id, status)
+				VALUES ($1, $2)
+				`, lobbyID, `PROCESSING`)
 
-	return mh.IDStr, nil
+				if err != nil {
+					r.logger.Error("step 5 failed", zap.Error(err))
+				}
+				NotificationSend(ctx, logger, r.db, r.router, notification)
+				NotificationSend(ctx, logger, r.db, r.router, notification2)
+				if err != nil {
+					r.logger.Error("Failed to send notification", zap.Error(err))
+					// Handle the error accordingly
+				}
+				break
+			} else if count >= params["second"].(int64) {
+				updateQuery := `
+					UPDATE drw_pvp_lobby
+					SET isbot = true
+					WHERE id = $1
+				`
+				_, err := r.db.Exec(updateQuery, lobby.ID)
+				if err != nil {
+					r.logger.Error("Failed to update lobby", zap.Error(err))
+				}
+				uid, err := uuid.FromString(lobby.UserID)
+				content := map[string]interface{}{
+					"lobby_id": lobby.ID,
+				}
+				contentBytes, err := json.Marshal(content)
+				if err != nil {
+					// Handle the error
+				}
+				senderID := uuid.Nil.String()
+				nots := []*api.Notification{
+					{
+						Id:         uuid.Must(uuid.NewV4()).String(),
+						Subject:    "Find opponent successful",
+						Content:    string(contentBytes),
+						Code:       4,
+						SenderId:   senderID,
+						Persistent: true,
+						CreateTime: &timestamppb.Timestamp{Seconds: time.Now().UTC().Unix()},
+					},
+				}
+				notification := map[uuid.UUID][]*api.Notification{
+					uid: nots,
+				}
+				_, err = r.db.Exec(`
+				INSERT INTO drw_pvp_battle
+				(lobby_id, status)
+				VALUES ($1, $2)
+				`, lobbyID, `PROCESSING`)
+
+				if err != nil {
+					r.logger.Error("step 5 failed", zap.Error(err))
+				}
+				NotificationSend(ctx, logger, r.db, r.router, notification)
+				break
+			} else if lobby.Status == `CANCELLED` {
+				break
+			}
+			// Delay for 1 second
+			time.Sleep(time.Second)
+		}
+	}()
+	logger.Debug("Create match golang2")
+	return "", nil
 }
 
 func (r *LocalMatchRegistry) NewMatch(logger *zap.Logger, id uuid.UUID, core RuntimeMatchCore, stopped *atomic.Bool, params map[string]interface{}) (*MatchHandler, error) {
