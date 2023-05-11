@@ -270,7 +270,9 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 			} else {
 				opponentUserID = ""
 			}
-			if lobby.Status == `MATCHED` {
+			if lobby.Status == `CANCELLED` {
+				break
+			} else if lobby.Status == `MATCHED` {
 				uid, err := uuid.FromString(lobby.UserID)
 				uid2, err := uuid.FromString(opponentUserID)
 				content := map[string]interface{}{
@@ -357,8 +359,6 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 					r.logger.Error("step 5 failed", zap.Error(err))
 				}
 				NotificationSend(ctx, logger, r.db, r.router, notification)
-				break
-			} else if lobby.Status == `CANCELLED` {
 				break
 			}
 			// Delay for 1 second
