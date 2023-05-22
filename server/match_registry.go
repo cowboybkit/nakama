@@ -226,146 +226,362 @@ func (r *LocalMatchRegistry) processLabelUpdates(batch *index.Batch) {
 	batch.Reset()
 }
 
+func sendNotify(ctx context.Context, logger *zap.Logger, db *sql.DB, router MessageRouter, userId string, subject string, code int32, content string) error {
+	uid, err := uuid.FromString(userId)
+	if err != nil {
+		// Handle the error
+	}
+	senderID := uuid.Nil.String()
+	nots := []*api.Notification{
+		{
+			Id:         uuid.Must(uuid.NewV4()).String(),
+			Subject:    subject,
+			Content:    content,
+			Code:       code,
+			SenderId:   senderID,
+			Persistent: true,
+			CreateTime: &timestamppb.Timestamp{Seconds: time.Now().UTC().Unix()},
+		},
+	}
+	notification := map[uuid.UUID][]*api.Notification{
+		uid: nots,
+	}
+	return NotificationSend(ctx, logger, db, router, notification)
+}
+
 func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger, createFn RuntimeMatchCreateFunction, module string, params map[string]interface{}) (string, error) {
-	logger.Debug("Create match golang1")
+	logger.Debug("PVP Strategy create match start")
+
 	go func() {
+		const (
+			STEP_LOBBY  = "LOBBY"
+			STEP_BATTLE = "BATTLE"
+
+			LOBBY_MATCHING        = "MATCHING"
+			LOBBY_MATCHED         = "MATCHED"
+			LOBBY_CANCELLED       = "CANCELLED"
+			LOBBY_READY_TO_BATTLE = "READY_TO_BATTLE"
+
+			BATTLE_PROCESSING     = "PROCESSING"
+			BATTLE_USER_SURRENDER = "USER_SURRENDER"
+			BATTLE_FINISHED       = "FINISHED"
+
+			PVP_LOBBY_STS_CODE  = 3
+			PVP_BATTLE_STS_CODE = 4
+			PVP_COUNT_CODE      = 5
+
+			USER_STATUS_INIT      = "INITIAL"
+			USER_STATUS_SURRENDER = "SURRENDER"
+			USER_STATUS_READY     = "READY"
+
+			MAX_MATCHING_TIME       = 15
+			MAX_PREPARE_BATTLE_TIME = 60
+		)
+
 		type Lobby struct {
 			ID             string
 			UserID         string
 			OpponentUserID *string
 			BidAmount      int
 			Status         string
+			HostStatus     string
+			OpponentStatus string
+			IsBot          bool
 		}
 		var lobby Lobby
 		query := fmt.Sprintf(`
 			INSERT INTO drw_pvp_lobby
-			(user_id, bid_amount, status)
-			VALUES ($1, $2, $3)
-			RETURNING id, user_id, bid_amount;
-		`)
-
-		err := r.db.QueryRow(query, params["userID"], params["bidAmount"], "MATCHING").Scan(
-			&lobby.ID, &lobby.UserID, &lobby.BidAmount,
-		)
-		if err != nil {
-			r.logger.Error("Cant insert data to drw_pvp_lobby", zap.Error(err))
-		}
-		lobbyID := lobby.ID
-		var count int64 = 0
-		for {
-			str := fmt.Sprintf("%d", count)
-			logger.Debug(str)
-			count++
-			query := fmt.Sprintf(`
-				SELECT *
-				FROM drw_pvp_lobby
-				WHERE id = $1
+			(user_id, bid_amount, status, host_status, opponent_status)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING id, user_id, bid_amount, status, host_status, opponent_status;
 			`)
 
-			r.db.QueryRow(query, lobbyID).Scan(&lobby.UserID, &lobby.BidAmount, &lobby.Status, &lobby.OpponentUserID)
+		err := r.db.QueryRow(query, params["userID"], params["bidAmount"], LOBBY_MATCHING, USER_STATUS_INIT, USER_STATUS_INIT).Scan(
+			&lobby.ID, &lobby.UserID, &lobby.BidAmount, &lobby.Status, &lobby.HostStatus, &lobby.OpponentStatus,
+		)
 
-			var opponentUserID string
-			if lobby.OpponentUserID != nil {
-				opponentUserID = *lobby.OpponentUserID
-			} else {
-				opponentUserID = ""
-			}
-			if lobby.Status == `CANCELLED` {
-				break
-			} else if lobby.Status == `MATCHED` {
-				uid, err := uuid.FromString(lobby.UserID)
-				uid2, err := uuid.FromString(opponentUserID)
-				content := map[string]interface{}{
-					"lobby_id": lobby.ID,
-				}
-				contentBytes, err := json.Marshal(content)
-				if err != nil {
-					// Handle the error
-				}
-				senderID := uuid.Nil.String()
-				nots := []*api.Notification{
-					{
-						Id:         uuid.Must(uuid.NewV4()).String(),
-						Subject:    "Find opponent successful",
-						Content:    string(contentBytes),
-						Code:       4,
-						SenderId:   senderID,
-						Persistent: true,
-						CreateTime: &timestamppb.Timestamp{Seconds: time.Now().UTC().Unix()},
-					},
-				}
-				notification := map[uuid.UUID][]*api.Notification{
-					uid: nots,
-				}
-				notification2 := map[uuid.UUID][]*api.Notification{
-					uid2: nots,
-				}
-				_, err = r.db.Exec(`
-				INSERT INTO drw_pvp_battle
-				(lobby_id, status)
-				VALUES ($1, $2)
-				`, lobbyID, `PROCESSING`)
-
-				if err != nil {
-					r.logger.Error("step 5 failed", zap.Error(err))
-				}
-				NotificationSend(ctx, logger, r.db, r.router, notification)
-				NotificationSend(ctx, logger, r.db, r.router, notification2)
-				if err != nil {
-					r.logger.Error("Failed to send notification", zap.Error(err))
-					// Handle the error accordingly
-				}
-				break
-			} else if count >= params["second"].(int64) {
-				updateQuery := `
-					UPDATE drw_pvp_lobby
-					SET isbot = true
-					WHERE id = $1
-				`
-				_, err := r.db.Exec(updateQuery, lobby.ID)
-				if err != nil {
-					r.logger.Error("Failed to update lobby", zap.Error(err))
-				}
-				uid, err := uuid.FromString(lobby.UserID)
-				content := map[string]interface{}{
-					"lobby_id": lobby.ID,
-				}
-				contentBytes, err := json.Marshal(content)
-				if err != nil {
-					// Handle the error
-				}
-				senderID := uuid.Nil.String()
-				nots := []*api.Notification{
-					{
-						Id:         uuid.Must(uuid.NewV4()).String(),
-						Subject:    "Find opponent successful",
-						Content:    string(contentBytes),
-						Code:       4,
-						SenderId:   senderID,
-						Persistent: true,
-						CreateTime: &timestamppb.Timestamp{Seconds: time.Now().UTC().Unix()},
-					},
-				}
-				notification := map[uuid.UUID][]*api.Notification{
-					uid: nots,
-				}
-				_, err = r.db.Exec(`
-				INSERT INTO drw_pvp_battle
-				(lobby_id, status)
-				VALUES ($1, $2)
-				`, lobbyID, `PROCESSING`)
-
-				if err != nil {
-					r.logger.Error("step 5 failed", zap.Error(err))
-				}
-				NotificationSend(ctx, logger, r.db, r.router, notification)
-				break
-			}
-			// Delay for 1 second
-			time.Sleep(time.Second)
+		if err != nil {
+			logger.Error("Can't insert data to drw_pvp_lobby", zap.Error(err))
+			return
 		}
+
+		lobbyID := lobby.ID
+		logger.Debug("PVP Strategy job start: ID = " + lobbyID)
+
+		var lobby_matching_count int64 = 0
+		var prepare_battle_count int64 = 0
+		var step string = STEP_LOBBY
+		for {
+			startTime := time.Now()
+			query := fmt.Sprintf(`
+			SELECT user_id, opponent_user_id, bid_amount, status, host_status, opponent_status, isbot
+			FROM drw_pvp_lobby
+			WHERE id = $1
+			`)
+			r.db.QueryRow(query, lobbyID).Scan(&lobby.UserID, &lobby.OpponentUserID, &lobby.BidAmount, &lobby.Status, &lobby.HostStatus, &lobby.OpponentStatus, &lobby.IsBot)
+
+			if step == STEP_LOBBY {
+				lobby_matching_count++
+				str := fmt.Sprintf("Lobby count: %d", lobby_matching_count)
+				logger.Debug(str)
+
+				var opponentUserID string
+				if lobby.OpponentUserID != nil {
+					opponentUserID = *lobby.OpponentUserID
+				} else {
+					opponentUserID = ""
+				}
+
+				if lobby.Status == LOBBY_CANCELLED {
+					logger.Debug("PVP Strategy job: User has cancelled")
+					break
+				} else if lobby.Status == LOBBY_MATCHED {
+					logger.Debug("PVP Strategy job: Match matched")
+					content := map[string]interface{}{
+						"lobby_id":     lobbyID,
+						"lobby_status": LOBBY_MATCHED,
+					}
+					contentBytes, err := json.Marshal(content)
+					if err != nil {
+						// Handle the error
+					}
+					err = sendNotify(ctx, logger, r.db, r.router, lobby.UserID,
+						"Find opponent successful",
+						PVP_LOBBY_STS_CODE,
+						string(contentBytes),
+					)
+					err = sendNotify(ctx, logger, r.db, r.router, opponentUserID,
+						"Find opponent successful",
+						PVP_LOBBY_STS_CODE,
+						string(contentBytes),
+					)
+
+					if err != nil {
+						r.logger.Error("Error in send notify PVP, lobbyID = " + lobbyID)
+						break
+					}
+					step = STEP_BATTLE
+				} else if lobby_matching_count >= MAX_MATCHING_TIME {
+					_, err := r.db.Exec(`
+						UPDATE drw_pvp_lobby
+						SET isbot = true
+						WHERE id = $1
+						`, lobbyID)
+					if err != nil {
+						r.logger.Error("Failed to update lobby", zap.Error(err))
+					}
+
+					_, err = r.db.Exec(`
+						INSERT INTO drw_pvp_battle
+						(lobby_id, status)
+						VALUES ($1, $2)
+						`, lobbyID, BATTLE_PROCESSING)
+
+					if err != nil {
+						r.logger.Error("Insert drw_pvp_battle fail", zap.Error(err))
+					}
+
+					content := map[string]interface{}{
+						"lobby_id":     lobbyID,
+						"lobby_status": LOBBY_MATCHED,
+					}
+					contentBytes, err := json.Marshal(content)
+					if err != nil {
+						// Handle the error
+					}
+					err = sendNotify(ctx, logger, r.db, r.router, lobby.UserID,
+						"Find opponent successful",
+						PVP_LOBBY_STS_CODE,
+						string(contentBytes),
+					)
+					step = STEP_BATTLE
+				}
+			} else if step == STEP_BATTLE {
+				prepare_battle_count++
+				str := fmt.Sprintf("Battle prepare count: %d", prepare_battle_count)
+				logger.Debug(str)
+
+				content := map[string]interface{}{
+					"lobby_id": lobbyID,
+					"count":    MAX_PREPARE_BATTLE_TIME - prepare_battle_count,
+				}
+				contentBytes, err := json.Marshal(content)
+				if err != nil {
+					// Handle the error
+				}
+
+				// Send count down to host
+				err = sendNotify(ctx, logger, r.db, r.router, lobby.UserID,
+					"Count down to prepare battle",
+					PVP_COUNT_CODE,
+					string(contentBytes),
+				)
+
+				if lobby.IsBot {
+					if lobby.HostStatus == USER_STATUS_READY {
+						logger.Debug("User ready to play with bot")
+						break
+					} else if lobby.HostStatus == USER_STATUS_SURRENDER {
+						logger.Debug("User surrender with bot")
+						break
+					} else if prepare_battle_count >= MAX_PREPARE_BATTLE_TIME {
+						logger.Debug("Time out battle prepare: User play with bot")
+						if lobby.HostStatus != USER_STATUS_READY {
+							logger.Debug("Host user AFK")
+							ticketQuery := `
+							UPDATE users SET pvp_ticket = pvp_ticket - $1 WHERE id = $2
+							`
+							_, err := r.db.Exec(ticketQuery, lobby.BidAmount, lobby.UserID)
+							if err != nil {
+								logger.Error("Host user AFK, update ticket error")
+							}
+
+							battleQuery := `
+							UPDATE drw_pvp_battle SET status = $1 WHERE lobby_id = $2
+							`
+							_, err = r.db.Exec(battleQuery, BATTLE_USER_SURRENDER, lobbyID)
+							if err != nil {
+								logger.Error("Host user AFK, update battle error")
+							}
+						}
+
+						break
+					}
+				} else {
+					// Send count down to opponent
+					err = sendNotify(ctx, logger, r.db, r.router, *lobby.OpponentUserID,
+						"Count down to prepare battle",
+						PVP_COUNT_CODE,
+						string(contentBytes),
+					)
+
+					if lobby.HostStatus == USER_STATUS_READY && lobby.OpponentStatus == USER_STATUS_READY {
+						logger.Debug("Both users ready to play")
+						break
+						// } else if lobby.HostStatus == USER_STATUS_SURRENDER && lobby.OpponentStatus == USER_STATUS_SURRENDER {
+						// 	logger.Debug("Both users ready to play")
+					} else if lobby.HostStatus == USER_STATUS_SURRENDER {
+						logger.Debug("Host user is surrenderred")
+						break
+					} else if lobby.OpponentStatus == USER_STATUS_SURRENDER {
+						logger.Debug("Opponent user is surrenderred")
+						break
+					} else if prepare_battle_count >= MAX_PREPARE_BATTLE_TIME {
+						logger.Debug("Time out battle prepare: 2 users")
+						if lobby.HostStatus != USER_STATUS_READY && lobby.OpponentStatus != USER_STATUS_READY {
+							logger.Debug("Both Host and Opponent user AFK")
+							// Update battle status
+							battleQuery := `
+							UPDATE drw_pvp_battle SET status = $1 WHERE lobby_id = $2
+							`
+							_, err = r.db.Exec(battleQuery, BATTLE_USER_SURRENDER, lobbyID)
+							if err != nil {
+								logger.Error("Both Host and Opponent user AFK: update battle error")
+							}
+
+							break
+						} else if lobby.HostStatus != USER_STATUS_READY {
+							logger.Debug("Host user AFK")
+							hostQuery := `
+							UPDATE users SET pvp_ticket = pvp_ticket - $1 WHERE id = $2
+							`
+							oppQuery := `
+							UPDATE users SET pvp_ticket = pvp_ticket + $1 WHERE id = $2
+							`
+							_, err := r.db.Exec(hostQuery, lobby.BidAmount, lobby.UserID)
+							if err != nil {
+								logger.Error("Update host BidAmount - error")
+							}
+							_, err = r.db.Exec(oppQuery, lobby.BidAmount, lobby.OpponentUserID)
+							if err != nil {
+								logger.Error("Update opponent BidAmount + error")
+							}
+
+							// Send notify to opponent
+							content := map[string]interface{}{
+								"lobby_id":      lobbyID,
+								"battle_status": BATTLE_USER_SURRENDER,
+							}
+							contentBytes, err := json.Marshal(content)
+							if err != nil {
+								// Handle the error
+							}
+							err = sendNotify(ctx, logger, r.db, r.router, *lobby.OpponentUserID,
+								"The opponent surrendered",
+								PVP_BATTLE_STS_CODE,
+								string(contentBytes),
+							)
+
+							// Update battle status
+							battleQuery := `
+							UPDATE drw_pvp_battle SET status = $1 WHERE lobby_id = $2
+							`
+							_, err = r.db.Exec(battleQuery, BATTLE_USER_SURRENDER, lobbyID)
+							if err != nil {
+								logger.Error("Host user AFK: update battle error")
+							}
+
+							break
+						} else if lobby.OpponentStatus != USER_STATUS_READY {
+							logger.Debug("Opponent user AFK")
+							hostQuery := `
+							UPDATE users SET pvp_ticket = pvp_ticket + $1 WHERE id = $2
+							`
+							oppQuery := `
+							UPDATE users SET pvp_ticket = pvp_ticket - $1 WHERE id = $2
+							`
+							_, err := r.db.Exec(hostQuery, lobby.BidAmount, lobby.UserID)
+							if err != nil {
+								logger.Error("Update host BidAmount + error")
+							}
+							_, err = r.db.Exec(oppQuery, lobby.BidAmount, lobby.OpponentUserID)
+							if err != nil {
+								logger.Error("Update opponent BidAmount - error")
+							}
+
+							// Send notify to host
+							content := map[string]interface{}{
+								"lobby_id":      lobbyID,
+								"battle_status": BATTLE_USER_SURRENDER,
+							}
+							contentBytes, err := json.Marshal(content)
+							if err != nil {
+								// Handle the error
+							}
+							err = sendNotify(ctx, logger, r.db, r.router, lobby.UserID,
+								"The opponent surrendered",
+								PVP_BATTLE_STS_CODE,
+								string(contentBytes),
+							)
+
+							// Update battle status
+							battleQuery := `
+							UPDATE drw_pvp_battle SET status = $1 WHERE lobby_id = $2
+							`
+							_, err = r.db.Exec(battleQuery, BATTLE_USER_SURRENDER, lobbyID)
+							if err != nil {
+								logger.Error("Opponent user AFK: update battle error")
+							}
+
+							break
+						} else {
+							logger.Debug("PVP Strategy match job end: ID = " + lobbyID)
+							break
+						}
+					}
+				}
+			}
+
+			// Calculate to sleep total 1s
+			elapsedTime := time.Since(startTime)
+			sleepDuration := time.Second - elapsedTime
+			if sleepDuration > 0 {
+				time.Sleep(sleepDuration)
+			}
+		}
+		logger.Debug("PVP Strategy match job end: ID = " + lobbyID)
 	}()
-	logger.Debug("Create match golang2")
+	logger.Debug("PVP Strategy create match end")
 	return "", nil
 }
 
