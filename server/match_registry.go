@@ -364,9 +364,9 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 				} else if lobby_matching_count >= MAX_MATCHING_TIME {
 					_, err := r.db.Exec(`
 						UPDATE drw_pvp_lobby
-						SET isbot = true
-						WHERE id = $1
-						`, lobbyID)
+						SET isbot = true, status = $1
+						WHERE id = $2
+						`, LOBBY_MATCHED, lobbyID)
 					if err != nil {
 						r.logger.Error("Failed to update lobby", zap.Error(err))
 					}
