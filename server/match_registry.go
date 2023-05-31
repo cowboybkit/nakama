@@ -340,6 +340,7 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 					content := map[string]interface{}{
 						"lobby_id":     lobbyID,
 						"lobby_status": LOBBY_MATCHED,
+						"amount_ticket": lobby.BidAmount,
 					}
 					contentBytes, err := json.Marshal(content)
 					if err != nil {
@@ -384,6 +385,7 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 					content := map[string]interface{}{
 						"lobby_id":     lobbyID,
 						"lobby_status": LOBBY_MATCHED,
+						"amount_ticket": lobby.BidAmount,
 					}
 					contentBytes, err := json.Marshal(content)
 					if err != nil {
