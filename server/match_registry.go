@@ -338,8 +338,8 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 				} else if lobby.Status == LOBBY_MATCHED {
 					logger.Debug("PVP Strategy job: Match matched")
 					content := map[string]interface{}{
-						"lobby_id":     lobbyID,
-						"lobby_status": LOBBY_MATCHED,
+						"lobby_id":      lobbyID,
+						"lobby_status":  LOBBY_MATCHED,
 						"amount_ticket": lobby.BidAmount,
 					}
 					contentBytes, err := json.Marshal(content)
@@ -383,8 +383,8 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 					}
 
 					content := map[string]interface{}{
-						"lobby_id":     lobbyID,
-						"lobby_status": LOBBY_MATCHED,
+						"lobby_id":      lobbyID,
+						"lobby_status":  LOBBY_MATCHED,
 						"amount_ticket": lobby.BidAmount,
 					}
 					contentBytes, err := json.Marshal(content)
@@ -396,6 +396,8 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 						PVP_LOBBY_STS_CODE,
 						string(contentBytes),
 					)
+					logger.Info("Logging content", zap.Any("content", content))
+					logger.Debug("Send noti find opponents successfully")
 					step = STEP_BATTLE
 				}
 			} else if step == STEP_BATTLE {
