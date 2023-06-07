@@ -356,7 +356,7 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 						PVP_LOBBY_STS_CODE,
 						string(contentBytes),
 					)
-
+					logger.Debug("Send noti find opponents successfully to 2 real user")
 					if err != nil {
 						r.logger.Error("Error in send notify PVP, lobbyID = " + lobbyID)
 						break
@@ -399,6 +399,7 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 					logger.Info("Logging content", zap.Any("content", content))
 					logger.Debug("Send noti find opponents successfully")
 					step = STEP_BATTLE
+					logger.Debug("Send noti find opponents successfully to user play with bot")
 				}
 			} else if step == STEP_BATTLE {
 				prepare_battle_count++
@@ -515,7 +516,7 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 								PVP_BATTLE_STS_CODE,
 								string(contentBytes),
 							)
-
+							logger.Debug("Send noti opponent surrendered successfully")
 							// Update battle status
 							battleQuery := `
 							UPDATE drw_pvp_battle SET status = $1 WHERE lobby_id = $2
@@ -557,7 +558,7 @@ func (r *LocalMatchRegistry) CreateMatch(ctx context.Context, logger *zap.Logger
 								PVP_BATTLE_STS_CODE,
 								string(contentBytes),
 							)
-
+							logger.Debug("Send noti opponent surrendered successfully")
 							// Update battle status
 							battleQuery := `
 							UPDATE drw_pvp_battle SET status = $1 WHERE lobby_id = $2
